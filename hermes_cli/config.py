@@ -2696,6 +2696,70 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def resolve_main_provider_policy(
+    config: dict, provider: str, model: str = ""
+) -> dict:
+    """Overlay config scoped to the agent's selected main provider/model.
+
+    ``main_provider_policies.<provider>`` is dormant until an agent is
+    constructed with that provider as its primary route. Optional
+    ``model_overrides.<exact-model-id>`` values are merged into the top-level
+    ``model`` section only for that exact active model, which keeps context
+    pins from leaking to smaller models on the same aggregator.
+
+    The selector itself (``model.provider`` / ``model.default``) remains owned
+    by ``/model`` and ``hermes model``; a policy can tune the selected route but
+    cannot select a different one recursively.
+
+    The input is never mutated. A non-matching, disabled, or malformed policy
+    returns it unchanged so this helper is cheap on the normal path.
+    """
+    if not isinstance(config, dict):
+        return {}
+    provider_key = str(provider or "").strip().lower()
+    if not provider_key:
+        return config
+    policies = config.get("main_provider_policies")
+    if not isinstance(policies, dict):
+        return config
+    policy = policies.get(provider_key)
+    if not isinstance(policy, dict) or policy.get("enabled", True) is False:
+        return config
+
+    overlay = {
+        key: value
+        for key, value in policy.items()
+        if key not in {"enabled", "model_overrides"}
+    }
+    model_key = str(model or "").strip()
+    model_overrides = policy.get("model_overrides")
+    model_overlay = (
+        model_overrides.get(model_key)
+        if isinstance(model_overrides, dict) and model_key
+        else None
+    )
+    if not overlay and not isinstance(model_overlay, dict):
+        return config
+    resolved = _deep_merge(config, overlay)
+    if isinstance(model_overlay, dict):
+        resolved_model_base = resolved.get("model")
+        if not isinstance(resolved_model_base, dict):
+            resolved_model_base = {}
+        resolved["model"] = _deep_merge(resolved_model_base, model_overlay)
+
+    # Policies are conditional behavior, not model selectors. Preserve the
+    # configured route even if a malformed policy tries to replace it.
+    base_model = config.get("model")
+    resolved_model = resolved.get("model")
+    if isinstance(base_model, dict) and isinstance(resolved_model, dict):
+        for selector in ("provider", "default", "model"):
+            if selector in base_model:
+                resolved_model[selector] = base_model[selector]
+            else:
+                resolved_model.pop(selector, None)
+    return resolved
+
+
 def _strip_dotted_keys(cfg: dict, dotted_keys: set) -> Tuple[dict, set]:
     """Remove the given dotted leaf keys from a nested config dict.
 
@@ -5326,6 +5390,7 @@ def _default_value_for_key(dotted_key: str):
 # or ``providers.openrouter.api_key`` without us needing to know server names.
 _OPEN_DICT_TOP_LEVEL_KEYS = frozenset({
     "providers",
+    "main_provider_policies",
     "credential_pool_strategies",
     "mcp_servers",
     "hooks",

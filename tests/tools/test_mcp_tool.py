@@ -4,12 +4,14 @@ All tests use mocks -- no real MCP servers or subprocesses are started.
 """
 
 import asyncio
+import gc
 import json
 import logging
 import os
 import sys
 import threading
 import time
+import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -573,6 +575,36 @@ class TestToolHandler:
                 result = json.loads(handler({"name": "world"}))
             assert result["result"] == "hello world"
             mock_session.call_tool.assert_called_once_with("greet", arguments={"name": "world"})
+        finally:
+            _servers.pop("test_srv", None)
+
+    def test_successful_call_does_not_leak_stdio_watcher_coroutine(self):
+        from tools.mcp_tool import _make_tool_handler, _servers
+
+        mock_session = MagicMock()
+        mock_session.call_tool = AsyncMock(
+            return_value=_make_call_result("hello world", is_error=False)
+        )
+        server = _make_mock_server("test_srv", session=mock_session)
+        _servers["test_srv"] = server
+
+        try:
+            handler = _make_tool_handler("test_srv", "greet", 120)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with self._patch_mcp_loop():
+                    result = json.loads(handler({"name": "world"}))
+                gc.collect()
+
+            assert result["result"] == "hello world"
+            leaked = [
+                warning
+                for warning in caught
+                if issubclass(warning.category, RuntimeWarning)
+                and "_watch_stdio_children" in str(warning.message)
+                and "was never awaited" in str(warning.message)
+            ]
+            assert leaked == []
         finally:
             _servers.pop("test_srv", None)
 

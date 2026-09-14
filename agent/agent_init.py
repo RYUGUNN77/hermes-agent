@@ -554,12 +554,12 @@ def init_agent(
     ephemeral_system_prompt: str = None,
     log_prefix_chars: int = 100,
     log_prefix: str = "",
-    providers_allowed: List[str] = None,
-    providers_ignored: List[str] = None,
-    providers_order: List[str] = None,
-    provider_sort: str = None,
+    providers_allowed: Optional[List[str]] = None,
+    providers_ignored: Optional[List[str]] = None,
+    providers_order: Optional[List[str]] = None,
+    provider_sort: Optional[str] = None,
     provider_require_parameters: bool = False,
-    provider_data_collection: str = None,
+    provider_data_collection: Optional[str] = None,
     openrouter_min_coding_score: Optional[float] = None,
     session_id: str = None,
     tool_progress_callback: callable = None,
@@ -584,7 +584,7 @@ def init_agent(
     event_callback: Optional[Callable[[str, dict], None]] = None,
     reaction_callback: Optional[Callable[[str], None]] = None,
     max_tokens: int = None,
-    reasoning_config: Dict[str, Any] = None,
+    reasoning_config: Optional[Dict[str, Any]] = None,
     service_tier: str = None,
     request_overrides: Dict[str, Any] = None,
     prefill_messages: List[Dict[str, Any]] = None,
@@ -605,7 +605,7 @@ def init_agent(
     parent_session_id: str = None,
     iteration_budget: "IterationBudget" = None,
     run_budget_seconds: Optional[float] = None,
-    fallback_model: Dict[str, Any] = None,
+    fallback_model: Optional[Dict[str, Any] | List[Dict[str, Any]]] = None,
     credential_pool=None,
     checkpoints_enabled: bool = False,
     checkpoint_max_snapshots: int = 20,
@@ -712,6 +712,76 @@ def init_agent(
         if isinstance(requested_provider, str) and requested_provider.strip()
         else agent.provider
     )
+
+    # Main-provider-scoped policy. The raw config remains unchanged; this
+    # projection exists only for agents whose PRIMARY provider matches a
+    # ``main_provider_policies.<provider>`` entry. That makes /model switches
+    # reversible without persisting auxiliary/fallback/routing values into the
+    # base profile. Explicit one-shot/session reasoning overrides still win:
+    # replace reasoning_config only when it is absent or still equals the base
+    # config-derived value.
+    _effective_main_provider_cfg = None
+    _main_provider_policy_has_model_override = False
+    try:
+        from hermes_cli.config import (
+            load_config_readonly as _load_policy_config,
+            resolve_main_provider_policy,
+        )
+        from hermes_cli.fallback_config import get_fallback_chain
+        from hermes_constants import resolve_reasoning_config
+
+        _base_policy_cfg = _load_policy_config()
+        _effective_main_provider_cfg = resolve_main_provider_policy(
+            _base_policy_cfg, agent.provider, model
+        )
+        if _effective_main_provider_cfg is not _base_policy_cfg:
+            _raw_provider_policy = (
+                (_base_policy_cfg.get("main_provider_policies") or {}).get(
+                    agent.provider
+                )
+            )
+            _raw_model_overrides = (
+                _raw_provider_policy.get("model_overrides")
+                if isinstance(_raw_provider_policy, dict)
+                else None
+            )
+            _main_provider_policy_has_model_override = bool(
+                isinstance(_raw_model_overrides, dict)
+                and isinstance(_raw_model_overrides.get(model), dict)
+            )
+            _policy_routing = _effective_main_provider_cfg.get("provider_routing") or {}
+            if isinstance(_policy_routing, dict):
+                _policy_only = _policy_routing.get("only")
+                _policy_ignore = _policy_routing.get("ignore")
+                _policy_order = _policy_routing.get("order")
+                _policy_sort = _policy_routing.get("sort")
+                providers_allowed = _policy_only if isinstance(_policy_only, list) else None
+                providers_ignored = _policy_ignore if isinstance(_policy_ignore, list) else None
+                providers_order = _policy_order if isinstance(_policy_order, list) else None
+                provider_sort = _policy_sort if isinstance(_policy_sort, str) else None
+                provider_require_parameters = bool(
+                    _policy_routing.get("require_parameters", False)
+                )
+                _policy_data_collection = _policy_routing.get("data_collection")
+                provider_data_collection = (
+                    _policy_data_collection
+                    if isinstance(_policy_data_collection, str)
+                    else None
+                )
+
+            fallback_model = get_fallback_chain(_effective_main_provider_cfg)
+
+            _base_reasoning = resolve_reasoning_config(_base_policy_cfg, model)
+            if reasoning_config is None or reasoning_config == _base_reasoning:
+                reasoning_config = resolve_reasoning_config(
+                    _effective_main_provider_cfg, model
+                )
+    except Exception:
+        # Policy resolution is an optional config projection; malformed policy
+        # data must degrade to the caller-provided/base runtime, never block an
+        # otherwise valid agent.
+        _effective_main_provider_cfg = None
+
     agent._credential_pool = credential_pool
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
@@ -1794,10 +1864,15 @@ def init_agent(
     from tools.todo_tool import TodoStore
     agent._todo_store = TodoStore()
     
-    # Load config once for memory, skills, and compression sections
+    # Load config once for memory, skills, and compression sections. Reuse the
+    # provider-scoped projection built above so model/context/compression reads
+    # agree with provider routing and fallback resolution for this agent.
     try:
-        from hermes_cli.config import load_config_readonly as _load_agent_config
-        _agent_cfg = _load_agent_config()
+        if _effective_main_provider_cfg is not None:
+            _agent_cfg = _effective_main_provider_cfg
+        else:
+            from hermes_cli.config import load_config_readonly as _load_agent_config
+            _agent_cfg = _load_agent_config()
     except Exception:
         _agent_cfg = {}
 
@@ -2588,7 +2663,9 @@ def init_agent(
             _configured_default_runtime_model
             and _configured_default_runtime_model != _active_runtime_model
         )
-        if _model_mismatch or _route_mismatch:
+        if (
+            _model_mismatch or _route_mismatch
+        ) and not _main_provider_policy_has_model_override:
             _ra().logger.debug(
                 "Ignoring model.context_length=%s for startup runtime %s at %s "
                 "(configured default is %s at %s)",
