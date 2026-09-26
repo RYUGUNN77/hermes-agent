@@ -984,7 +984,7 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     """Resolve runtime provider credentials for agent execution. Ladder (order is behavior — each
     rung returns or raises, else falls to the next):
       1. disabled-provider guard (``providers.<name>.enabled: false``)
-      2. requested-name shortcuts: moa, anthropic@azure, azure-foundry, vertex
+      2. requested-name shortcuts: trp-auto bootstrap, moa, anthropic@azure, azure-foundry, vertex
       3. named custom provider / llamacpp alias / bare-custom direct alias
       4. local-endpoint bypass (no explicit creds, config base_url at a non-cloud host)
       5. ``auth.resolve_provider`` → explicit --api-key/--base-url path
@@ -998,6 +998,9 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     target_model overrides model_cfg["default"] when computing provider-specific api_mode (e.g.
     OpenCode Zen/Go where different models route through different API surfaces)."""
     requested_provider = resolve_requested_provider(requested)
+    if requested_provider == "trp-auto":
+        from hermes_cli.trp_auto_bridge import resolve_bootstrap_runtime
+        return resolve_bootstrap_runtime(target_model)
     _raise_if_provider_disabled(requested_provider)
     # Same alias expansion the auxiliary client applies, so ``provider: openai`` means one thing on
     # every path (background review, curator, MoA slots, delegation) instead of "Unknown provider".

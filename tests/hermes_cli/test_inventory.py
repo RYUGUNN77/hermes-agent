@@ -180,6 +180,7 @@ def test_explicit_only_filters_ambient_credentials_but_keeps_current_and_custom_
         "openai-codex",
         "gemini",
         "custom:lab",
+        "trp-auto",
     ]
 
 

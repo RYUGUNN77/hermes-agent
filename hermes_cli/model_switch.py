@@ -1751,6 +1751,17 @@ def switch_model(
     step returns a failure :class:`ModelSwitchResult` to stop the chain, or ``None`` to continue.
     ``user_providers`` / ``custom_providers`` are the config.yaml ``providers:`` dict and
     ``custom_providers:`` list."""
+    if explicit_provider.strip().lower() == "trp-auto":
+        target = raw_input.strip() or "TRP_AUTO"
+        if target.casefold() != "trp_auto".casefold():
+            return ModelSwitchResult(
+                success=False, target_provider="trp-auto", provider_label="TRP_AUTO",
+                error_message="TRP_AUTO exposes only the TRP_AUTO virtual model.", is_global=is_global)
+        return ModelSwitchResult(
+            success=True, new_model="TRP_AUTO", target_provider="trp-auto",
+            provider_changed=current_provider.strip().lower() != "trp-auto",
+            provider_label="TRP_AUTO", is_global=is_global)
+
     st = _Switch(
         raw_input=raw_input, current_provider=current_provider, current_model=current_model,
         current_base_url=current_base_url, current_api_key=current_api_key, is_global=is_global,
