@@ -40,6 +40,13 @@ class TestPredicate:
 
 
 class TestEarlyRecovery:
+    def test_interrupted_pull_skips_live_checkout_before_marker_probe(self, monkeypatch):
+        def _boom(*_args):
+            raise AssertionError("marker probed in the live checkout")
+
+        monkeypatch.setattr(er, "interrupted_pull_marker", _boom)
+        assert er.restore_interrupted_pull(CHECKOUT_ROOT) is False
+
     def test_skips_live_checkout_before_any_probe_or_lock(self, monkeypatch):
         # A probe call would mean recovery is proceeding against the live
         # checkout; the guard must return before ANY side-effectful step.
