@@ -1020,6 +1020,8 @@ def build_turn_context(
     from tools.skill_provenance import set_review_attended
     set_review_attended(getattr(agent, "_review_attended", False))
     agent._restore_primary_runtime()
+    from hermes_cli.trp_auto_bridge import route_turn as route_trp_auto_turn
+    route_trp_auto_turn(agent, user_message if isinstance(user_message, str) else "")
     _publish_runtime_main(agent)
     _refresh_mcp_tools_between_turns(agent)
 
