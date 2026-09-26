@@ -16639,6 +16639,10 @@ def test_model_options_preserves_canonical_custom_row_after_agent_init(monkeypat
         "hermes_cli.auth.is_provider_explicitly_configured",
         lambda _slug: False,
     )
+    monkeypatch.setattr(
+        "hermes_cli.inventory._anthropic_oauth_credentials_present",
+        lambda: False,
+    )
     monkeypatch.setattr("hermes_cli.inventory._apply_pricing", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("hermes_cli.inventory._apply_capabilities", lambda *_args, **_kwargs: None)
 
@@ -16650,6 +16654,7 @@ def test_model_options_preserves_canonical_custom_row_after_agent_init(monkeypat
     assert "result" in resp, resp
     assert resp["result"]["provider"] == "custom:local-ollama"
     assert [row["slug"] for row in resp["result"]["providers"]] == [
+        "trp-auto",
         "custom:local-ollama"
     ]
 
