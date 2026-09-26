@@ -14,6 +14,19 @@ from hermes_constants import get_hermes_home
 
 _RESOLVING: ContextVar[bool] = ContextVar("trp_auto_bootstrap_resolving", default=False)
 _FORBIDDEN_PHYSICAL_PROVIDERS = frozenset({"", "auto", "custom", "moa", "openrouter", "trp-auto"})
+_PHYSICAL_PROVIDER_BY_PLATFORM_PROVIDER = {
+    "openai-codex": "openai-codex",
+    "anthropic": "anthropic",
+    "xai": "xai-oauth",
+}
+_PLATFORM_PROVIDER_BY_PHYSICAL_PROVIDER = {
+    physical: platform for platform, physical in _PHYSICAL_PROVIDER_BY_PLATFORM_PROVIDER.items()
+}
+_ALLOWED_SUBSCRIPTION_SOURCES = {
+    "openai-codex": "device_code",
+    "anthropic": "claude_code",
+    "xai-oauth": "device_code",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +56,41 @@ def _decision_field(decision: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise TrpAutoBootstrapError(f"TRP_AUTO bootstrap decision has invalid {name}.")
     return value.strip()
+
+
+def _physical_provider(platform_provider: str) -> str:
+    try:
+        return _PHYSICAL_PROVIDER_BY_PLATFORM_PROVIDER[platform_provider]
+    except KeyError:
+        raise TrpAutoBootstrapError(
+            f"TRP_AUTO bootstrap decision selected non-physical provider '{platform_provider}'."
+        ) from None
+
+
+def _validate_subscription_runtime(
+    runtime: Any, platform_provider: str, *, decision_kind: str
+) -> str:
+    if not isinstance(runtime, dict):
+        raise TrpAutoBootstrapError("TRP_AUTO physical resolver returned an invalid runtime.")
+    expected = _physical_provider(platform_provider)
+    physical = runtime.get("provider")
+    if not isinstance(physical, str):
+        physical = ""
+    if physical in _FORBIDDEN_PHYSICAL_PROVIDERS:
+        raise TrpAutoBootstrapError(
+            f"TRP_AUTO physical resolver returned non-physical provider '{physical or '<empty>'}'."
+        )
+    if physical != expected:
+        raise TrpAutoBootstrapError(
+            f"TRP_AUTO physical runtime '{physical}' did not match {decision_kind} provider "
+            f"'{platform_provider}'."
+        )
+    source = runtime.get("source")
+    if source != _ALLOWED_SUBSCRIPTION_SOURCES[physical]:
+        raise TrpAutoBootstrapError(
+            f"TRP_AUTO physical runtime '{physical}' used an unapproved credential source."
+        )
+    return physical
 
 
 def _resolve_physical_runtime(provider: str, model: str) -> dict:
@@ -85,25 +133,17 @@ def resolve_bootstrap_runtime(target_model: str | None = None) -> dict:
             raise TrpAutoBootstrapError(
                 f"TRP_AUTO bootstrap decision selected non-physical provider '{provider or '<empty>'}'."
             )
+        physical_provider = _physical_provider(provider)
         try:
-            runtime = _resolve_physical_runtime(provider, model)
+            runtime = _resolve_physical_runtime(physical_provider, model)
         except Exception as exc:
             raise TrpAutoBootstrapError(
                 f"TRP_AUTO could not resolve subscription seat {provider}/{model} ({type(exc).__name__})."
             ) from None
-        if not isinstance(runtime, dict):
-            raise TrpAutoBootstrapError("TRP_AUTO physical resolver returned an invalid runtime.")
-        physical = str(runtime.get("provider") or "").strip().lower()
-        if physical in _FORBIDDEN_PHYSICAL_PROVIDERS:
-            raise TrpAutoBootstrapError(
-                f"TRP_AUTO physical resolver returned non-physical provider '{physical or '<empty>'}'."
-            )
-        if physical != provider:
-            raise TrpAutoBootstrapError(
-                f"TRP_AUTO physical runtime '{physical}' did not match bootstrap provider '{provider}'."
-            )
+        physical = _validate_subscription_runtime(runtime, provider, decision_kind="bootstrap")
 
         result = dict(runtime)
+        result["provider"] = physical
         result["requested_provider"] = "trp-auto"
         result["trp_auto"] = {
             "virtual_provider": "trp-auto",
@@ -158,7 +198,9 @@ def route_turn(agent: Any, user_text: str) -> bool:
         decision = resolve(
             user_text,
             requested_provider="trp-auto",
-            current_provider=current_provider,
+            current_provider=_PLATFORM_PROVIDER_BY_PHYSICAL_PROVIDER.get(
+                current_provider, current_provider
+            ),
             current_model=current_model,
         )
         provider = _decision_field(decision, "provider").lower()
@@ -174,16 +216,12 @@ def route_turn(agent: Any, user_text: str) -> bool:
         if not switch:
             return False
 
-        runtime = _resolve_physical_runtime(provider, model)
-        if not isinstance(runtime, dict):
-            raise TrpAutoBootstrapError("TRP_AUTO physical resolver returned an invalid runtime.")
-        physical = str(runtime.get("provider") or "").strip().lower()
-        if physical != provider or physical in _FORBIDDEN_PHYSICAL_PROVIDERS:
-            raise TrpAutoBootstrapError("TRP_AUTO physical runtime did not match the turn decision.")
+        runtime = _resolve_physical_runtime(_physical_provider(provider), model)
+        physical = _validate_subscription_runtime(runtime, provider, decision_kind="turn decision")
 
         agent.switch_model(
             new_model=model,
-            new_provider=provider,
+            new_provider=physical,
             api_key=runtime.get("api_key") or "",
             base_url=runtime.get("base_url") or "",
             api_mode=runtime.get("api_mode") or "",
