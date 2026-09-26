@@ -31,6 +31,38 @@ def _runtime_fields(cli) -> dict:
     return {key: getattr(cli, key, None) for key in _RUNTIME_FIELDS}
 
 
+def _materialize_trp_auto_result(result):
+    """Return the validated physical runtime carried by a virtual TRP_AUTO selection."""
+    if str(result.target_provider or "").strip().lower() != "trp-auto":
+        return result, None
+    from dataclasses import replace
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+
+    runtime = resolve_runtime_provider(requested="trp-auto", target_model="TRP_AUTO")
+    provenance = runtime.get("trp_auto")
+    physical = {
+        "provider": runtime.get("provider"),
+        "model": provenance.get("bootstrap_model") if isinstance(provenance, dict) else None,
+        "api_key": runtime.get("api_key"),
+        "base_url": runtime.get("base_url"),
+        "api_mode": runtime.get("api_mode"),
+    }
+    if not all(isinstance(value, str) and value for value in physical.values()):
+        raise ValueError("TRP_AUTO bootstrap runtime is incomplete")
+    capabilities = runtime.get("capabilities")
+    if capabilities is not None and not isinstance(capabilities, dict):
+        raise ValueError("TRP_AUTO bootstrap capabilities are invalid")
+    return replace(
+        result,
+        new_model=physical["model"],
+        target_provider=physical["provider"],
+        api_key=physical["api_key"],
+        base_url=physical["base_url"],
+        api_mode=physical["api_mode"],
+        runtime_capabilities=capabilities,
+    ), "trp-auto"
+
+
 def _resolve_cli_reasoning(cli) -> None:
     """Re-resolve the CLI-level ``reasoning_config`` for ``cli.model`` through the shared chokepoint
     (per-model ``reasoning_overrides`` > global ``agent.reasoning_effort``). Startup resolves it once
@@ -650,27 +682,41 @@ class CLIModelSwitchMixin:
         """
         from cli import _cprint
         _cli_snapshot = _runtime_fields(self)
-        self.model = result.new_model
-        self.provider = result.target_provider
-        self.requested_provider = result.target_provider
+        try:
+            applied_result, virtual_provider = _materialize_trp_auto_result(result)
+        except Exception as exc:
+            _cprint(
+                f"  ⚠ Model switch to {result.new_model} failed ({type(exc).__name__}); "
+                f"staying on {old_model}.")
+            return False
+        self.model = applied_result.new_model
+        self.provider = applied_result.target_provider
+        self.requested_provider = virtual_provider or applied_result.target_provider
         # Always overwrite explicit overrides so stale credentials from the previous provider
         # (e.g. Ollama api_key/base_url) don't leak into the next resolution.
-        self._explicit_api_key = result.api_key
-        self._explicit_base_url = result.base_url
-        if result.api_key:
-            self.api_key = result.api_key
-        if result.base_url:
-            self.base_url = result.base_url
-        if result.api_mode:
-            self.api_mode = result.api_mode
+        self._explicit_api_key = applied_result.api_key
+        self._explicit_base_url = applied_result.base_url
+        if applied_result.api_key:
+            self.api_key = applied_result.api_key
+        if applied_result.base_url:
+            self.base_url = applied_result.base_url
+        if applied_result.api_mode:
+            self.api_mode = applied_result.api_mode
         _resolve_cli_reasoning(self)
 
-        if self.agent is not None:
+        agent = getattr(self, "agent", None)
+        if agent is not None:
             try:
-                self.agent.switch_model(
-                    new_model=result.new_model, new_provider=result.target_provider,
-                    api_key=result.api_key, base_url=result.base_url, api_mode=result.api_mode,
-                    capabilities=getattr(result, "runtime_capabilities", None))
+                agent.switch_model(
+                    new_model=applied_result.new_model, new_provider=applied_result.target_provider,
+                    api_key=applied_result.api_key, base_url=applied_result.base_url,
+                    api_mode=applied_result.api_mode,
+                    capabilities=getattr(applied_result, "runtime_capabilities", None))
+                if virtual_provider:
+                    agent.requested_provider = virtual_provider
+                    primary = getattr(agent, "_primary_runtime", None)
+                    if isinstance(primary, dict):
+                        primary["requested_provider"] = virtual_provider
             except Exception as exc:
                 # The agent rolled itself back to the old working model/client. Roll the CLI's own staged
                 # fields back too and abort the rest of the commit (note + success print) so a failed switch

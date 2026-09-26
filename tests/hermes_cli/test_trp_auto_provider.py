@@ -58,6 +58,27 @@ def test_selecting_trp_auto_persists_virtual_provider_and_model(tmp_path, monkey
     assert (saved["provider"], saved["default"]) == ("trp-auto", "TRP_AUTO")
 
 
+def test_runtime_provider_honors_disabled_trp_auto_before_virtual_resolution(monkeypatch):
+    import hermes_cli.runtime_provider as runtime_provider
+
+    monkeypatch.setattr(
+        runtime_provider._config_mod,
+        "load_config",
+        lambda: {"providers": {"trp-auto": {"enabled": False}}},
+    )
+    calls = []
+    monkeypatch.setattr(
+        "hermes_cli.trp_auto_bridge.resolve_bootstrap_runtime",
+        lambda target: calls.append(target) or {},
+    )
+
+    with pytest.raises(ValueError, match="providers.trp-auto.enabled: false"):
+        runtime_provider.resolve_runtime_provider(
+            requested="trp-auto", target_model="TRP_AUTO"
+        )
+    assert calls == []
+
+
 def test_runtime_provider_bootstraps_trp_auto_to_a_physical_runtime(tmp_path, monkeypatch):
     plugin = tmp_path / "plugins" / "trp-auto"
     plugin.mkdir(parents=True)
