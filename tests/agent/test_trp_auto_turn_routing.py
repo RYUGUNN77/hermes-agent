@@ -62,13 +62,19 @@ def _install_seat_plugin(home: Path) -> None:
 
 
 def _runtime(provider: str, model: str) -> dict:
+    physical_provider, source = {
+        "openai-codex": ("openai-codex", "device_code"),
+        "anthropic": ("anthropic", "claude_code"),
+        "xai-oauth": ("xai-oauth", "device_code"),
+    }[provider]
     return {
-        "provider": provider,
+        "provider": physical_provider,
         "model": model,
-        "base_url": f"https://{provider}.example",
-        "api_key": f"{provider}-subscription",
+        "base_url": f"https://{physical_provider}.example",
+        "api_key": f"{physical_provider}-subscription",
         "api_mode": "anthropic_messages" if provider == "anthropic" else "codex_responses",
         "capabilities": {"seat": model},
+        "source": source,
     }
 
 
@@ -122,7 +128,7 @@ def test_route_turn_selects_policy_and_research_seats(
 
     assert bridge.route_turn(agent, prompt) is True
     assert (agent.provider, agent.model, agent.requested_provider) == (
-        provider,
+        "xai-oauth" if provider == "xai" else provider,
         model,
         "trp-auto",
     )
@@ -154,6 +160,20 @@ def test_repeated_route_for_the_current_seat_does_not_switch_again(tmp_path, mon
 
     assert bridge.route_turn(agent, "implement the parser") is True
     assert bridge.route_turn(agent, "implement the parser") is False
+    assert len(agent.switch_calls) == 1
+
+
+def test_repeated_grok_route_compares_platform_and_physical_provider_names(tmp_path, monkeypatch):
+    _install_seat_plugin(tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    import hermes_cli.trp_auto_bridge as bridge
+
+    monkeypatch.setattr(bridge, "_resolve_physical_runtime", _runtime)
+    agent = _FakeAgent()
+
+    assert bridge.route_turn(agent, "research the latest incident") is True
+    assert bridge.route_turn(agent, "research the latest incident") is False
     assert len(agent.switch_calls) == 1
 
 

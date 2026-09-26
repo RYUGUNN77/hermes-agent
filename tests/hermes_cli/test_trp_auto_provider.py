@@ -90,7 +90,7 @@ def test_runtime_provider_bootstraps_trp_auto_to_a_physical_runtime(tmp_path, mo
             "api_mode": "codex_responses",
             "base_url": "https://chatgpt.com/backend-api/codex",
             "api_key": "subscription-token",
-            "source": "codex-oauth",
+            "source": "device_code",
             "requested_provider": "openai-codex",
         }
 
@@ -131,6 +131,105 @@ def test_physical_runtime_must_match_the_bootstrap_seat(tmp_path, monkeypatch):
         lambda *_args: {"provider": "anthropic", "api_mode": "anthropic_messages"},
     )
     with pytest.raises(bridge.TrpAutoBootstrapError, match="did not match bootstrap provider"):
+        bridge.resolve_bootstrap_runtime("TRP_AUTO")
+
+
+def test_grok_seat_maps_to_xai_oauth_device_code_runtime(tmp_path, monkeypatch):
+    plugin = tmp_path / "plugins" / "trp-auto"
+    plugin.mkdir(parents=True)
+    (plugin / "seat.py").write_text(
+        "from types import SimpleNamespace\n"
+        "def bootstrap_seat():\n"
+        "    return SimpleNamespace(provider='xai', model='grok-4.7', "
+        "reason='canonical', switch=True, frontier=True, control_digest='digest')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    import hermes_cli.trp_auto_bridge as bridge
+
+    calls = []
+
+    def physical(provider, model):
+        calls.append((provider, model))
+        return {
+            "provider": "xai-oauth",
+            "api_mode": "codex_responses",
+            "api_key": "subscription-token",
+            "source": "device_code",
+        }
+
+    monkeypatch.setattr(bridge, "_resolve_physical_runtime", physical)
+
+    runtime = bridge.resolve_bootstrap_runtime("TRP_AUTO")
+
+    assert calls == [("xai-oauth", "grok-4.7")]
+    assert runtime["provider"] == "xai-oauth"
+    assert runtime["requested_provider"] == "trp-auto"
+
+
+def test_static_credential_source_is_rejected(tmp_path, monkeypatch):
+    plugin = tmp_path / "plugins" / "trp-auto"
+    plugin.mkdir(parents=True)
+    (plugin / "seat.py").write_text(
+        "from types import SimpleNamespace\n"
+        "def bootstrap_seat():\n"
+        "    return SimpleNamespace(provider='openai-codex', model='gpt-6-sol', "
+        "reason='canonical', switch=True, frontier=False, control_digest='digest')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    import hermes_cli.trp_auto_bridge as bridge
+
+    monkeypatch.setattr(
+        bridge,
+        "_resolve_physical_runtime",
+        lambda *_args: {
+            "provider": "openai-codex",
+            "api_key": "static-token",
+            "source": "env",
+        },
+    )
+
+    with pytest.raises(bridge.TrpAutoBootstrapError, match="credential source"):
+        bridge.resolve_bootstrap_runtime("TRP_AUTO")
+
+
+@pytest.mark.parametrize(
+    ("provider", "source"),
+    [
+        ("OPENAI-CODEX", "device_code"),
+        ("openai-codex", "device_code "),
+    ],
+)
+def test_provider_and_credential_source_require_exact_allowlist_values(
+    tmp_path, monkeypatch, provider, source
+):
+    plugin = tmp_path / "plugins" / "trp-auto"
+    plugin.mkdir(parents=True)
+    (plugin / "seat.py").write_text(
+        "from types import SimpleNamespace\n"
+        "def bootstrap_seat():\n"
+        "    return SimpleNamespace(provider='openai-codex', model='gpt-6-sol', "
+        "reason='canonical', switch=True, frontier=False, control_digest='digest')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    import hermes_cli.trp_auto_bridge as bridge
+
+    monkeypatch.setattr(
+        bridge,
+        "_resolve_physical_runtime",
+        lambda *_args: {
+            "provider": provider,
+            "api_key": "subscription-token",
+            "source": source,
+        },
+    )
+
+    with pytest.raises(bridge.TrpAutoBootstrapError):
         bridge.resolve_bootstrap_runtime("TRP_AUTO")
 
 
