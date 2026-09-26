@@ -119,6 +119,9 @@ def build_models_payload(
     if moa_row is not None:
         rows = [moa_row] + _without_slug(rows, "moa")
 
+    trp_auto_row = _trp_auto_provider_row(ctx.current_provider)
+    rows = _without_slug(rows, "trp-auto") + [trp_auto_row]
+
     if explicit_only:
         rows = _filter_explicit_provider_rows(rows, ctx)
         # If the current provider lost its credential, list_authenticated_providers() omits it; keep
@@ -135,7 +138,8 @@ def build_models_payload(
     _strip_aggregator_overlaps(rows)
 
     if include_unconfigured:
-        rows = list(rows) + _without_slug(_append_unconfigured_rows(rows, ctx), "moa")
+        unconfigured = _without_slug(_append_unconfigured_rows(rows, ctx), "moa")
+        rows = list(rows) + _without_slug(unconfigured, "trp-auto")
     if picker_hints:
         _apply_picker_hints(rows)
     if canonical_order:
@@ -493,6 +497,8 @@ def _filter_explicit_provider_rows(rows: list[dict], ctx: ConfigContext) -> list
             # Virtual routing mode, not a configured provider: hide unless current (above) or the user
             # wrote an enabled preset into RAW config (the DEFAULT_CONFIG preset must not show MoA).
             return _raw_config_has_enabled_moa_preset()
+        if slug == "trp-auto":
+            return True
         return (
             # Anthropic OAuth (device flow / Claude Code) and external-process CLIs (copilot-acp) are
             # deliberate sign-ins that leave no trace in config/env; keep the rows discovery accepted.
@@ -744,3 +750,12 @@ def _moa_provider_row(current_provider: str = "") -> dict | None:
             warning="Aggregator is the acting model billed for the run; references only advise once per user turn by default.")
     except Exception:
         return None
+
+
+def _trp_auto_provider_row(current_provider: str = "") -> dict:
+    """Credential-free virtual provider backed by a physical subscription seat at runtime."""
+    return _row(
+        "trp-auto", "TRP_AUTO", (current_provider or "").lower() == "trp-auto",
+        models=["TRP_AUTO"], total_models=1, source="virtual", authenticated=True,
+        auth_type="virtual", warning=None,
+    )

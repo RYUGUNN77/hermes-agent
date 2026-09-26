@@ -156,6 +156,7 @@ _XAI_MODELS = _xai_curated_models()
 
 # Curated per-provider lists. ``-cn`` twins share the international catalog on a domestic endpoint.
 _PROVIDER_MODELS: dict[str, list[str]] = {
+    "trp-auto": ["TRP_AUTO"],
     "moa": ["default"],
     "nous": [mid for mid, _ in OPENROUTER_MODELS if mid not in _OPENROUTER_ONLY and not mid.endswith(":free")],
     # Used by /model counts and provider_model_ids fallback when /v1/models is unavailable.
@@ -342,6 +343,7 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [ProviderEntry(*row) for row in (
     ("azure-foundry", "Azure Foundry", "Azure Foundry (OpenAI-style or Anthropic-style endpoint, your Azure AI deployment)"),
     ("ai-gateway", "Vercel AI Gateway", "Vercel AI Gateway (Multi-model aggregator)"),
     ("qwen-oauth", "Qwen OAuth (Portal)", "Qwen OAuth (Reuses local Qwen CLI login)"),
+    ("trp-auto", "TRP_AUTO", "TRP_AUTO (virtual subscription-seat router)"),
 )]
 
 
