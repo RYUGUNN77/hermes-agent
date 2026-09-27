@@ -674,12 +674,35 @@ async function pidIsOurDashboard(
     ' raw=open(f"/proc/{pid}/cmdline","rb").read()\n' +
     ' args=[x.decode("utf-8","surrogateescape") for x in raw.split(b"\\0") if x]\n' +
     'except OSError:\n' +
-    ' try:\n' +
-    '  line=subprocess.check_output(["ps","-ww","-o","command=","-p",str(pid)],text=True).strip()\n' +
-    ' except subprocess.CalledProcessError:\n' +
-    '  # pid already gone — a dead process is FOREIGN, not a transport error\n' +
-    '  print("FOREIGN");sys.exit(0)\n' +
-    ' args=shlex.split(line)\n' +
+    ' if sys.platform=="darwin":\n' +
+    // macOS ps output loses argv boundaries (notably spaces in token paths).
+    // Read the kernel's NUL-delimited argv; failure must remain fail-closed.
+    '  try:\n' +
+    '   import ctypes\n' +
+    '   libc=ctypes.CDLL(None,use_errno=True)\n' +
+    '   mib=(ctypes.c_int*3)(1,49,pid)\n' +
+    '   size=ctypes.c_size_t()\n' +
+    '   if libc.sysctl(mib,3,None,ctypes.byref(size),None,0)!=0: raise OSError(ctypes.get_errno())\n' +
+    '   if not 4<size.value<=1048576: raise ValueError("invalid argv size")\n' +
+    '   buf=ctypes.create_string_buffer(size.value)\n' +
+    '   if libc.sysctl(mib,3,buf,ctypes.byref(size),None,0)!=0: raise OSError(ctypes.get_errno())\n' +
+    '   raw=buf.raw[:size.value]\n' +
+    '   argc=int.from_bytes(raw[:4],sys.byteorder,signed=True)\n' +
+    '   if not 0<argc<=65536: raise ValueError("invalid argc")\n' +
+    '   start=raw.index(b"\\0",4)+1\n' +
+    '   while start<len(raw) and raw[start]==0: start+=1\n' +
+    '   fields=raw[start:].split(b"\\0")\n' +
+    '   if len(fields)<=argc: raise ValueError("truncated argv")\n' +
+    '   args=[x.decode("utf-8","surrogateescape") for x in fields[:argc]]\n' +
+    '  except (OSError,ValueError,AttributeError):\n' +
+    '   print("FOREIGN");sys.exit(0)\n' +
+    ' else:\n' +
+    '  try:\n' +
+    '   line=subprocess.check_output(["ps","-ww","-o","command=","-p",str(pid)],text=True).strip()\n' +
+    '  except subprocess.CalledProcessError:\n' +
+    '   # pid already gone — a dead process is FOREIGN, not a transport error\n' +
+    '   print("FOREIGN");sys.exit(0)\n' +
+    '  args=shlex.split(line)\n' +
     'ok=False\n' +
     'try:\n' +
     ' serve=args.index("serve")\n' +

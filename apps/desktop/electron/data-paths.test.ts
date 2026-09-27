@@ -12,6 +12,8 @@ afterEach((): void => {
 })
 
 test.skipIf(process.platform === 'win32')('local SSH sockets use the suffixed default root', (): void => {
+  // Exercise suffix selection independently of the caller's home-path length.
+  vi.stubEnv('HOME', '/home/test')
   vi.stubEnv('HERMES_DATA_DIR_SUFFIX', 'magic-test')
   const socket: string = controlSocketPath('user', 'host', 22)
 

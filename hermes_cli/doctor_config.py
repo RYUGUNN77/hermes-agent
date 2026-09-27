@@ -219,6 +219,8 @@ def _validate_model_config(config_path, issues: list) -> None:
     provider = provider_raw.lower()
     default_model = (model_section.get("default") or model_section.get("model") or "").strip()
     known_providers, custom_providers, resolve_auth, normalize, resolve_full = _known_provider_ids(cfg)
+    # TRP_AUTO is a selectable virtual router, not a physical provider catalog entry.
+    known_providers = set(known_providers) | {"trp-auto"}
     valid_provider_ids = set(known_providers)
     accept = {provider} if provider else set()
     for known_provider in known_providers if normalize is not None else ():
@@ -227,7 +229,7 @@ def _validate_model_config(config_path, issues: list) -> None:
         except Exception:
             continue
     runtime_provider = catalog_provider = provider
-    if provider and provider not in {"auto", "custom"}:
+    if provider and provider not in {"auto", "custom", "trp-auto"}:
         if resolve_auth is not None:
             try:
                 runtime_provider = resolve_auth(provider)

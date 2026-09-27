@@ -4,6 +4,17 @@ import pytest
 import yaml
 
 
+@pytest.mark.parametrize("provider,unknown", [("trp-auto", False), ("not-a-real-provider", True)])
+def test_doctor_recognizes_trp_auto_without_accepting_unknown_providers(tmp_path, provider, unknown):
+    from hermes_cli.doctor_config import _validate_model_config
+
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump({"model": {"provider": provider, "default": "TRP_AUTO"}}))
+    issues = []
+    _validate_model_config(path, issues)
+    assert any("is unknown" in issue for issue in issues) is unknown
+
+
 def test_trp_auto_is_a_builtin_selectable_virtual_provider_without_credentials(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr("hermes_cli.model_switch.list_authenticated_providers", lambda **_kwargs: [])
