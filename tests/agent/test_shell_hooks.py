@@ -517,6 +517,37 @@ class TestEvaluateResult:
         )
         assert r is None
 
+    @pytest.mark.parametrize("returncode", [1, 2, 7, -15])
+    @pytest.mark.parametrize("stdout", ["", " \n", "{}", "garbage", '[]',
+                                       '{"action":"modify","args":{}}',
+                                       '{"action":"approve"}', '{"action":"allow"}'])
+    def test_fail_closed_nonzero_always_blocks(self, returncode, stdout):
+        result = shell_hooks._evaluate_result(
+            self._spec(fail_closed=True),
+            _spawn_result(returncode=returncode, stdout=stdout),
+        )
+        assert result is not None and result["action"] == "block"
+
+    @pytest.mark.parametrize("returncode", [1, 2, 7, -15])
+    def test_fail_closed_nonzero_preserves_block_message(self, returncode):
+        result = shell_hooks._evaluate_result(
+            self._spec(fail_closed=True),
+            _spawn_result(returncode=returncode,
+                          stdout='{"action":"block","message":"policy reason"}'),
+        )
+        assert result == {"action": "block", "message": "policy reason"}
+
+    @pytest.mark.parametrize("event,fail_closed,returncode", [
+        ("pre_tool_call", False, 1), ("pre_tool_call", True, 0),
+        ("post_tool_call", True, 1), ("on_session_start", True, 1),
+    ])
+    def test_nonzero_fix_preserves_other_contracts(self, event, fail_closed, returncode):
+        result = shell_hooks._evaluate_result(
+            self._spec(event=event, fail_closed=fail_closed),
+            _spawn_result(returncode=returncode, stdout=""),
+        )
+        assert result is None
+
     # -- fail_closed ------------------------------------------------------
 
     def test_spawn_error_fails_open_by_default(self):
